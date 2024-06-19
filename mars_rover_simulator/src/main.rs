@@ -31,12 +31,10 @@ impl Motor {
     }
 
     fn apply_force(&self) -> f64 {
-        // Simulate force applied by the motor based on power and efficiency
         self.power * self.efficiency * 0.01 // Arbitrary conversion to force for simulation
     }
 
     fn apply_friction(&self, velocity: f64) -> f64 {
-        // Simulate friction deceleration based on motor friction factor
         -self.friction * velocity
     }
 }
@@ -52,6 +50,7 @@ struct Rover {
     battery: f64,         // Battery level
     sensors: Sensors,     // Sensors for environment scanning
     grid: Vec<Vec<char>>, // Map grid for pathfinding
+    energy_consumed: f64, // Total energy consumed by the rover
 }
 
 #[derive(Debug)]
@@ -87,19 +86,20 @@ impl CommunicationModule {
 struct Sensors {
     has_camera: bool,
     has_lidar: bool,
+    battery_level: f64,
 }
 
 impl Sensors {
     fn new() -> Sensors {
         Sensors {
             has_camera: true,
-            has_lidar: false,
+            has_lidar: true,
+            battery_level: 100.0,
         }
     }
 
     fn scan_environment(&self) {
         println!("Scanning environment...");
-        // Simulate sensor scanning based on sensor types
         if self.has_camera {
             println!("Using camera for environment scan.");
         }
@@ -111,29 +111,35 @@ impl Sensors {
     }
 
     fn detect_obstacle(&self) -> bool {
-        // Simulate obstacle detection using sensor data fusion
         let camera_result = self.detect_with_camera();
         let lidar_result = self.detect_with_lidar();
-
         camera_result || lidar_result
     }
 
     fn detect_with_camera(&self) -> bool {
-        // Simulate camera-based obstacle detection
         println!("Analyzing camera data...");
         thread::sleep(Duration::from_secs(1));
         println!("Camera analysis complete.");
-        // Example logic: detect obstacle within certain distance
         self.has_camera && (rand::random::<f64>() < 0.2)
     }
 
     fn detect_with_lidar(&self) -> bool {
-        // Simulate LiDAR-based obstacle detection
         println!("Scanning with LiDAR...");
         thread::sleep(Duration::from_secs(1));
         println!("LiDAR scan complete.");
-        // Example logic: detect obstacle within certain distance
         self.has_lidar && (rand::random::<f64>() < 0.2)
+    }
+
+    fn battery_usage(&mut self, usage: f64) {
+        self.battery_level -= usage;
+        if self.battery_level < 0.0 {
+            self.battery_level = 0.0;
+        }
+        println!("Battery level: {:.2}%", self.battery_level);
+    }
+
+    fn get_battery_level(&self) -> f64 {
+        self.battery_level
     }
 }
 
@@ -145,8 +151,6 @@ struct State {
 
 impl Ord for State {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Notice that the we flip the ordering on costs.
-        // In Rust, BinaryHeap is a max-heap by default.
         other.cost.partial_cmp(&self.cost).unwrap()
     }
 }
@@ -170,6 +174,7 @@ impl Rover {
             battery: 100.0,
             sensors: Sensors::new(),
             grid,
+            energy_consumed: 0.0,
         }
     }
 
@@ -178,13 +183,13 @@ impl Rover {
         let dy = distance * self.orientation.to_radians().sin();
         self.position.0 += dx;
         self.position.1 += dy;
-        self.velocity = (
-            self.velocity.0 + dx,
-            self.velocity.1 + dy,
-        );
+        self.velocity = (self.velocity.0 + dx, self.velocity.1 + dy);
         println!("Moving forward by {:.2} meters", distance);
-        self.drive_motors(50.0); // Simulate both motors running at 50% power
-        thread::sleep(Duration::from_millis(200)); // Simulate movement time
+        self.drive_motors(50.0);
+        self.energy_consumed += distance * 0.5; // Example energy consumption rate
+        self.battery -= distance * 0.5; // Example battery usage rate
+        self.sensors.battery_usage(distance * 0.5); // Update sensor battery level
+        thread::sleep(Duration::from_millis(200));
         self.stop_motors();
     }
 
@@ -193,29 +198,35 @@ impl Rover {
         let dy = -distance * self.orientation.to_radians().sin();
         self.position.0 += dx;
         self.position.1 += dy;
-        self.velocity = (
-            self.velocity.0 + dx,
-            self.velocity.1 + dy,
-        );
+        self.velocity = (self.velocity.0 + dx, self.velocity.1 + dy);
         println!("Moving backward by {:.2} meters", distance);
-        self.drive_motors(-50.0); // Simulate both motors running in reverse at 50% power
-        thread::sleep(Duration::from_millis(200)); // Simulate movement time
+        self.drive_motors(-50.0);
+        self.energy_consumed += distance * 0.5;
+        self.battery -= distance * 0.5;
+        self.sensors.battery_usage(distance * 0.5); // Update sensor battery level
+        thread::sleep(Duration::from_millis(200));
         self.stop_motors();
     }
 
     fn turn_left(&mut self, angle: f64) {
         self.orientation += angle;
         println!("Turning left by {:.2} degrees", angle);
-        self.drive_motors(-30.0, 30.0); // Simulate left turn
-        thread::sleep(Duration::from_millis(100)); // Simulate turning time
+        self.drive_motors(-30.0, 30.0);
+        self.energy_consumed += angle * 0.1; // Example energy consumption rate for turning
+        self.battery -= angle * 0.1; // Example battery usage rate for turning
+        self.sensors.battery_usage(angle * 0.1); // Update sensor battery level
+        thread::sleep(Duration::from_millis(100));
         self.stop_motors();
     }
 
     fn turn_right(&mut self, angle: f64) {
         self.orientation -= angle;
         println!("Turning right by {:.2} degrees", angle);
-        self.drive_motors(30.0, -30.0); // Simulate right turn
-        thread::sleep(Duration::from_millis(100)); // Simulate turning time
+        self.drive_motors(30.0, -30.0);
+        self.energy_consumed += angle * 0.1;
+        self.battery -= angle * 0.1;
+        self.sensors.battery_usage(angle * 0.1); // Update sensor battery level
+        thread::sleep(Duration::from_millis(100));
         self.stop_motors();
     }
 
@@ -232,14 +243,10 @@ impl Rover {
     fn update_velocity(&mut self) {
         let force_left = self.motor_left.apply_force();
         let force_right = self.motor_right.apply_force();
-
-        // Calculate acceleration based on forces and current orientation
         let acceleration = (
             (force_left + force_right) * self.orientation.to_radians().cos(),
             (force_left + force_right) * self.orientation.to_radians().sin(),
         );
-
-        // Update velocity based on acceleration and apply friction
         self.velocity = (
             self.velocity.0 + acceleration.0 + self.motor_left.apply_friction(self.velocity.0),
             self.velocity.1 + acceleration.1 + self.motor_right.apply_friction(self.velocity.1),
@@ -247,7 +254,6 @@ impl Rover {
     }
 
     fn update_position(&mut self, time_step: f64) {
-        // Update position based on current velocity and time step
         self.position.0 += self.velocity.0 * time_step;
         self.position.1 += self.velocity.1 * time_step;
     }
@@ -264,21 +270,26 @@ impl Rover {
         self.orientation
     }
 
+    fn get_battery_level(&self) -> f64 {
+        self.battery
+    }
+
+    fn get_energy_consumed(&self) -> f64 {
+        self.energy_consumed
+    }
+
     fn navigate_to(&mut self, target_x: f64, target_y: f64) {
         println!("Navigating to ({:.2}, {:.2})", target_x, target_y);
         let current_x = self.position.0;
         let current_y = self.position.1;
-
         let dx = target_x - current_x;
         let dy = target_y - current_y;
         let distance = (dx.powi(2) + dy.powi(2)).sqrt();
         let angle_to_target = dy.atan2(dx).to_degrees();
-
         let angle_difference = angle_to_target - self.orientation;
         if angle_difference.abs() > 1.0 {
             self.turn_right(angle_difference);
         }
-
         self.move_forward(distance);
         println!("Arrived at: {:?}", self.get_position());
     }
@@ -440,6 +451,8 @@ fn main() {
                     let distance: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.move_forward(distance);
                     println!("Current Position: {:?}", rover.get_position());
+                    println!("Battery Level: {:.2}%", rover.get_battery_level());
+                    println!("Energy Consumed: {:.2} J", rover.get_energy_consumed());
                 }
             }
             "backward" => {
@@ -447,6 +460,8 @@ fn main() {
                     let distance: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.move_backward(distance);
                     println!("Current Position: {:?}", rover.get_position());
+                    println!("Battery Level: {:.2}%", rover.get_battery_level());
+                    println!("Energy Consumed: {:.2} J", rover.get_energy_consumed());
                 }
             }
             "left" => {
@@ -454,6 +469,8 @@ fn main() {
                     let angle: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.turn_left(angle);
                     println!("Current Orientation: {:.2} degrees", rover.get_orientation());
+                    println!("Battery Level: {:.2}%", rover.get_battery_level());
+                    println!("Energy Consumed: {:.2} J", rover.get_energy_consumed());
                 }
             }
             "right" => {
@@ -461,6 +478,8 @@ fn main() {
                     let angle: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.turn_right(angle);
                     println!("Current Orientation: {:.2} degrees", rover.get_orientation());
+                    println!("Battery Level: {:.2}%", rover.get_battery_level());
+                    println!("Energy Consumed: {:.2} J", rover.get_energy_consumed());
                 }
             }
             "navigate" => {
@@ -468,6 +487,8 @@ fn main() {
                     let target_x: f64 = parts[1].parse().unwrap_or(0.0);
                     let target_y: f64 = parts[2].parse().unwrap_or(0.0);
                     rover.navigate_to(target_x, target_y);
+                    println!("Battery Level: {:.2}%", rover.get_battery_level());
+                    println!("Energy Consumed: {:.2} J", rover.get_energy_consumed());
                 }
             }
             "scan" => {
