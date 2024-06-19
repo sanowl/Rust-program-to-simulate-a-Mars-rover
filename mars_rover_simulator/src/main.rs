@@ -20,12 +20,18 @@ impl Motor {
         self.power = 0.0;
         println!("Motor stopped");
     }
+
+    fn apply_force(&self) -> f64 {
+        // Simulate force applied by the motor based on power
+        self.power * 0.01 // Arbitrary conversion to force for simulation
+    }
 }
 
 struct Rover {
     motor_left: Motor,
     motor_right: Motor,
     position: (f64, f64), // (x, y) position
+    velocity: (f64, f64), // (vx, vy) velocity
     orientation: f64,     // Current orientation angle in degrees
     communication_module: CommunicationModule,
     battery: f64,         // Battery level
@@ -93,6 +99,7 @@ impl Rover {
             motor_left: Motor::new(),
             motor_right: Motor::new(),
             position: (0.0, 0.0),
+            velocity: (0.0, 0.0),
             orientation: 0.0,
             communication_module: CommunicationModule::new(),
             battery: 100.0,
@@ -105,6 +112,10 @@ impl Rover {
         let dy = distance * self.orientation.to_radians().sin();
         self.position.0 += dx;
         self.position.1 += dy;
+        self.velocity = (
+            self.velocity.0 + dx,
+            self.velocity.1 + dy,
+        );
         println!("Moving forward by {:.2} meters", distance);
         self.drive_motors(50.0); // Simulate both motors running at 50% power
         thread::sleep(Duration::from_millis(200)); // Simulate movement time
@@ -116,6 +127,10 @@ impl Rover {
         let dy = -distance * self.orientation.to_radians().sin();
         self.position.0 += dx;
         self.position.1 += dy;
+        self.velocity = (
+            self.velocity.0 + dx,
+            self.velocity.1 + dy,
+        );
         println!("Moving backward by {:.2} meters", distance);
         self.drive_motors(-50.0); // Simulate both motors running in reverse at 50% power
         thread::sleep(Duration::from_millis(200)); // Simulate movement time
@@ -150,6 +165,10 @@ impl Rover {
 
     fn get_position(&self) -> (f64, f64) {
         self.position
+    }
+
+    fn get_velocity(&self) -> (f64, f64) {
+        self.velocity
     }
 
     fn get_orientation(&self) -> f64 {
@@ -256,6 +275,7 @@ fn main() {
                     let distance: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.move_forward(distance);
                     println!("Current Position: {:?}", rover.get_position());
+                    println!("Current Velocity: {:?}", rover.get_velocity());
                 }
             }
             "backward" => {
@@ -263,6 +283,7 @@ fn main() {
                     let distance: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.move_backward(distance);
                     println!("Current Position: {:?}", rover.get_position());
+                    println!("Current Velocity: {:?}", rover.get_velocity());
                 }
             }
             "left" => {
