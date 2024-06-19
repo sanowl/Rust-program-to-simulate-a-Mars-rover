@@ -1,14 +1,23 @@
+use std::collections::BinaryHeap;
+use std::cmp::Ordering;
 use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
+#[derive(Debug)]
 struct Motor {
     power: f64,
+    efficiency: f64, // Efficiency factor for converting power to force
+    friction: f64,   // Friction factor affecting motor deceleration
 }
 
 impl Motor {
     fn new() -> Motor {
-        Motor { power: 0.0 }
+        Motor {
+            power: 0.0,
+            efficiency: 0.8, // Example efficiency factor (80% efficient)
+            friction: 0.1,   // Example friction factor
+        }
     }
 
     fn set_power(&mut self, power: f64) {
@@ -22,11 +31,17 @@ impl Motor {
     }
 
     fn apply_force(&self) -> f64 {
-        // Simulate force applied by the motor based on power
-        self.power * 0.01 // Arbitrary conversion to force for simulation
+        // Simulate force applied by the motor based on power and efficiency
+        self.power * self.efficiency * 0.01 // Arbitrary conversion to force for simulation
+    }
+
+    fn apply_friction(&self, velocity: f64) -> f64 {
+        // Simulate friction deceleration based on motor friction factor
+        -self.friction * velocity
     }
 }
 
+#[derive(Debug)]
 struct Rover {
     motor_left: Motor,
     motor_right: Motor,
@@ -36,8 +51,10 @@ struct Rover {
     communication_module: CommunicationModule,
     battery: f64,         // Battery level
     sensors: Sensors,     // Sensors for environment scanning
+    grid: Vec<Vec<char>>, // Map grid for pathfinding
 }
 
+#[derive(Debug)]
 struct CommunicationModule {
     is_connected: bool,
 }
@@ -66,6 +83,7 @@ impl CommunicationModule {
     }
 }
 
+#[derive(Debug)]
 struct Sensors {
     has_camera: bool,
     has_lidar: bool,
@@ -91,10 +109,57 @@ impl Sensors {
         thread::sleep(Duration::from_secs(2));
         println!("Environment scan complete.");
     }
+
+    fn detect_obstacle(&self) -> bool {
+        // Simulate obstacle detection using sensor data fusion
+        let camera_result = self.detect_with_camera();
+        let lidar_result = self.detect_with_lidar();
+
+        camera_result || lidar_result
+    }
+
+    fn detect_with_camera(&self) -> bool {
+        // Simulate camera-based obstacle detection
+        println!("Analyzing camera data...");
+        thread::sleep(Duration::from_secs(1));
+        println!("Camera analysis complete.");
+        // Example logic: detect obstacle within certain distance
+        self.has_camera && (rand::random::<f64>() < 0.2)
+    }
+
+    fn detect_with_lidar(&self) -> bool {
+        // Simulate LiDAR-based obstacle detection
+        println!("Scanning with LiDAR...");
+        thread::sleep(Duration::from_secs(1));
+        println!("LiDAR scan complete.");
+        // Example logic: detect obstacle within certain distance
+        self.has_lidar && (rand::random::<f64>() < 0.2)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct State {
+    cost: f64,
+    position: (usize, usize),
+}
+
+impl Ord for State {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Notice that the we flip the ordering on costs.
+        // In Rust, BinaryHeap is a max-heap by default.
+        other.cost.partial_cmp(&self.cost).unwrap()
+    }
+}
+
+impl PartialOrd for State {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Rover {
-    fn new() -> Rover {
+    fn new(grid_size: usize) -> Rover {
+        let grid = vec![vec!['.'; grid_size]; grid_size];
         Rover {
             motor_left: Motor::new(),
             motor_right: Motor::new(),
@@ -104,6 +169,7 @@ impl Rover {
             communication_module: CommunicationModule::new(),
             battery: 100.0,
             sensors: Sensors::new(),
+            grid,
         }
     }
 
@@ -163,6 +229,29 @@ impl Rover {
         self.motor_right.stop();
     }
 
+    fn update_velocity(&mut self) {
+        let force_left = self.motor_left.apply_force();
+        let force_right = self.motor_right.apply_force();
+
+        // Calculate acceleration based on forces and current orientation
+        let acceleration = (
+            (force_left + force_right) * self.orientation.to_radians().cos(),
+            (force_left + force_right) * self.orientation.to_radians().sin(),
+        );
+
+        // Update velocity based on acceleration and apply friction
+        self.velocity = (
+            self.velocity.0 + acceleration.0 + self.motor_left.apply_friction(self.velocity.0),
+            self.velocity.1 + acceleration.1 + self.motor_right.apply_friction(self.velocity.1),
+        );
+    }
+
+    fn update_position(&mut self, time_step: f64) {
+        // Update position based on current velocity and time step
+        self.position.0 += self.velocity.0 * time_step;
+        self.position.1 += self.velocity.1 * time_step;
+    }
+
     fn get_position(&self) -> (f64, f64) {
         self.position
     }
@@ -194,12 +283,84 @@ impl Rover {
         println!("Arrived at: {:?}", self.get_position());
     }
 
-    fn detect_obstacle(&self) -> bool {
-        let obstacle_present = (self.position.0.abs() < 2.0 && self.position.1.abs() < 2.0);
-        if obstacle_present {
-            println!("Obstacle detected!");
+    fn a_star(&self, start: (usize, usize), goal: (usize, usize)) -> Option<Vec<(usize, usize)>> {
+        let mut open_set = BinaryHeap::new();
+        let mut came_from = vec![vec![None; self.grid.len()]; self.grid.len()];
+        let mut g_score = vec![vec![f64::INFINITY; self.grid.len()]; self.grid.len()];
+        let mut f_score = vec![vec![f64::INFINITY; self.grid.len()]; self.grid.len()];
+
+        g_score[start.0][start.1] = 0.0;
+        f_score[start.0][start.1] = self.heuristic(start, goal);
+
+        open_set.push(State {
+            cost: f_score[start.0][start.1],
+            position: start,
+        });
+
+        while let Some(State { cost: _, position }) = open_set.pop() {
+            if position == goal {
+                return Some(self.reconstruct_path(came_from, position));
+            }
+
+            for neighbor in self.get_neighbors(position) {
+                let tentative_g_score = g_score[position.0][position.1] + self.distance(position, neighbor);
+
+                if tentative_g_score < g_score[neighbor.0][neighbor.1] {
+                    came_from[neighbor.0][neighbor.1] = Some(position);
+                    g_score[neighbor.0][neighbor.1] = tentative_g_score;
+                    f_score[neighbor.0][neighbor.1] = g_score[neighbor.0][neighbor.1] + self.heuristic(neighbor, goal);
+
+                    open_set.push(State {
+                        cost: f_score[neighbor.0][neighbor.1],
+                        position: neighbor,
+                    });
+                }
+            }
         }
-        obstacle_present
+
+        None
+    }
+
+    fn heuristic(&self, start: (usize, usize), goal: (usize, usize)) -> f64 {
+        let (x1, y1) = start;
+        let (x2, y2) = goal;
+        ((x2 as isize - x1 as isize).abs() + (y2 as isize - y1 as isize).abs()) as f64
+    }
+
+    fn distance(&self, start: (usize, usize), neighbor: (usize, usize)) -> f64 {
+        let (x1, y1) = start;
+        let (x2, y2) = neighbor;
+        (((x2 as isize - x1 as isize).pow(2) + (y2 as isize - y1 as isize).pow(2)) as f64).sqrt()
+    }
+
+    fn get_neighbors(&self, position: (usize, usize)) -> Vec<(usize, usize)> {
+        let mut neighbors = Vec::new();
+        let (x, y) = position;
+
+        if x > 0 {
+            neighbors.push((x - 1, y));
+        }
+        if x < self.grid.len() - 1 {
+            neighbors.push((x + 1, y));
+        }
+        if y > 0 {
+            neighbors.push((x, y - 1));
+        }
+        if y < self.grid.len() - 1 {
+            neighbors.push((x, y + 1));
+        }
+
+        neighbors
+    }
+
+    fn reconstruct_path(&self, came_from: Vec<Vec<Option<(usize, usize)>>>, mut current: (usize, usize)) -> Vec<(usize, usize)> {
+        let mut total_path = vec![current];
+        while let Some(next) = came_from[current.0][current.1] {
+            current = next;
+            total_path.push(current);
+        }
+        total_path.reverse();
+        total_path
     }
 
     fn scan_environment(&self) {
@@ -254,10 +415,14 @@ impl Rover {
 }
 
 fn main() {
-    let mut rover = Rover::new();
+    let mut rover = Rover::new(10);
+    let time_step = 0.1; // Simulation time step in seconds
 
     loop {
-        println!("Enter command ('forward 10', 'left 90', 'navigate 5 5', 'scan', 'terrain rocky', 'connect', 'send_data', 'autopilot', 'exit'):");
+        rover.update_velocity();
+        rover.update_position(time_step);
+
+        println!("Enter command ('forward 10', 'left 90', 'navigate 5 5', 'scan', 'terrain rocky', 'connect', 'send_data', 'autopilot', 'pathfind 0 0 9 9', 'exit'):");
         print!("> ");
         io::stdout().flush().unwrap();
 
@@ -275,7 +440,6 @@ fn main() {
                     let distance: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.move_forward(distance);
                     println!("Current Position: {:?}", rover.get_position());
-                    println!("Current Velocity: {:?}", rover.get_velocity());
                 }
             }
             "backward" => {
@@ -283,7 +447,6 @@ fn main() {
                     let distance: f64 = parts[1].parse().unwrap_or(0.0);
                     rover.move_backward(distance);
                     println!("Current Position: {:?}", rover.get_position());
-                    println!("Current Velocity: {:?}", rover.get_velocity());
                 }
             }
             "left" => {
@@ -325,6 +488,19 @@ fn main() {
             "autopilot" => {
                 rover.auto_pilot();
             }
+            "pathfind" => {
+                if parts.len() > 4 {
+                    let start_x: usize = parts[1].parse().unwrap_or(0);
+                    let start_y: usize = parts[2].parse().unwrap_or(0);
+                    let goal_x: usize = parts[3].parse().unwrap_or(0);
+                    let goal_y: usize = parts[4].parse().unwrap_or(0);
+                    if let Some(path) = rover.a_star((start_x, start_y), (goal_x, goal_y)) {
+                        println!("Path found: {:?}", path);
+                    } else {
+                        println!("No path found.");
+                    }
+                }
+            }
             "exit" => {
                 println!("Exiting program.");
                 break;
@@ -334,9 +510,12 @@ fn main() {
             }
         }
 
-        if rover.detect_obstacle() {
+        if rover.sensors.detect_obstacle() {
             println!("Stopping due to obstacle!");
             break;
         }
+
+        println!("Current Velocity: {:?}", rover.get_velocity());
+        thread::sleep(Duration::from_secs_f64(time_step));
     }
 }
